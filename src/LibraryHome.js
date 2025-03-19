@@ -1,133 +1,195 @@
-import React, { useState, useEffect } from "react";
-import { Container, Row, Col, Card, Button, Alert } from "react-bootstrap";
+import React, { useState, useEffect, useCallback } from "react";
+import { Container, Row, Col, Card, Button, Alert, Form } from "react-bootstrap";
 import availableBooks from "./books";
 
 const LibraryHome = () => {
   const [books, setBooks] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
+  const [username, setUsername] = useState(localStorage.getItem("username") || "");
+  const [token, setToken] = useState(localStorage.getItem("token") || "");
+  const [userId, setUserId] = useState(localStorage.getItem("userId") || "");
+
+  const fetchBooks = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch("http://localhost:5000/books", {
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
+      });
+
+      if (res.status === 401) {
+        logout();
+        return;
+      }
+
+      const data = await res.json();
+      setBooks(Array.isArray(data) ? data : []);
+    } catch {
+      setMessage({ type: "danger", text: "Failed to fetch books" });
+    }
+  }, [token]);
 
   useEffect(() => {
-    fetchBooks();
-  }, []);
+    if (token) fetchBooks();
+  }, [token, fetchBooks]);
 
-  const fetchBooks = () => {
-    fetch("http://localhost:5000/books")
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setBooks(data);
-        } else {
-          setError("Invalid response format");
-        }
-        setLoading(false);
-      })
-      .catch(() => {
-        setError("Failed to fetch books");
-        setLoading(false);
+  const handleAuth = async (endpoint) => {
+    if (!username.trim()) {
+      setMessage({ type: "warning", text: "Please enter a username." });
+      return;
+    }
+
+    try {
+      const res = await fetch(`http://localhost:5000/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username }),
       });
+
+      const data = await res.json();
+
+      if (res.ok && data.token) {
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("userId", data.userId);
+        localStorage.setItem("username", username);
+        setToken(data.token);
+        setUserId(data.userId);
+        setMessage({ type: "success", text: "Authentication successful!" });
+
+        setTimeout(fetchBooks, 100);
+      } else {
+        setMessage({ type: "danger", text: data.error || "Authentication failed" });
+      }
+    } catch {
+      setMessage({ type: "danger", text: "Error during authentication" });
+    }
   };
 
-  const addBook = (book) => {
-    fetch("http://localhost:5000/books", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(book),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.error) {
-          setMessage({ type: "danger", text: data.error });
-        } else {
-          setMessage({ type: "success", text: "Book added successfully!" });
-          fetchBooks();
-        }
-      })
-      .catch(() => setMessage({ type: "danger", text: "Error adding book" }));
+  const logout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("userId");
+    localStorage.removeItem("username");
+    setToken("");
+    setUserId("");
+    setUsername("");
+    setBooks([]);
+    window.location.reload();
   };
 
-  const deleteBook = (id) => {
-    fetch(`http://localhost:5000/books/${id}`, {
-      method: "DELETE",
-    })
-      .then((res) => res.json())
-      .then(() => {
-        setMessage({ type: "success", text: "Book removed from library!" });
-        fetchBooks();
-      })
-      .catch(() => setMessage({ type: "danger", text: "Error deleting book" }));
+  const addBook = async (book) => {
+    if (!userId) {
+      setMessage({ type: "danger", text: "User not authenticated" });
+      return;
+    }
+
+    try {
+      const res = await fetch("http://localhost:5000/books", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ ...book, userId }),
+      });
+
+      if (res.ok) fetchBooks();
+      else setMessage({ type: "danger", text: "Failed to add book" });
+    } catch {
+      setMessage({ type: "danger", text: "Error adding book" });
+    }
   };
 
-  if (loading) return <p className="text-center mt-4">Loading books...</p>;
-  if (error) return <p className="text-center text-danger">{error}</p>;
+  const deleteBook = async (id) => {
+    try {
+      const res = await fetch(`http://localhost:5000/books/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
+      });
+
+      if (res.ok) fetchBooks();
+      else setMessage({ type: "danger", text: "Failed to delete book" });
+    } catch {
+      setMessage({ type: "danger", text: "Error deleting book" });
+    }
+  };
 
   const filteredAvailableBooks = availableBooks.filter(
     (book) => !books.some((b) => b.title === book.title),
   );
 
+  if (!token) {
+    return (
+      <Container className="text-center mt-5">
+        <h1>📚 Welcome to Your Library</h1>
+        {message && <Alert variant={message.type}>{message.text}</Alert>}
+        <Form.Control
+          className="my-2"
+          placeholder="Enter username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+        />
+        <Button className="m-2" onClick={() => handleAuth("register")}>
+          Register
+        </Button>
+        <Button className="m-2" onClick={() => handleAuth("login")}>
+          Login
+        </Button>
+      </Container>
+    );
+  }
+
   return (
-    <Container className="text-center mt-5">
-      <h1 className="mb-4 text-primary">📚 Welcome to Your Library</h1>
+    <Container>
+      <div className="d-flex justify-content-between align-items-center my-3">
+        <h2>Your Library</h2>
+        <div>
+          <strong>👤 Logged in as: {username}</strong>
+        </div>
+        <Button variant="danger" onClick={logout}>
+          Logout
+        </Button>
+      </div>
 
       {message && <Alert variant={message.type}>{message.text}</Alert>}
 
-      <Row className="mt-4">
-        <h3 className="w-100">Library Collection</h3>
-        {books.length === 0 ? (
-          <p className="w-100 text-muted">No books in your library.</p>
-        ) : (
+      <Row>
+        {books.length > 0 ? (
           books.map((book) => (
-            <Col key={book._id} md={4} className="mb-4">
-              <Card className="shadow-sm h-100">
-                <Card.Img
-                  variant="top"
-                  src={book.cover}
-                  alt={book.title}
-                  style={{ height: "200px", objectFit: "cover" }}
-                />
+            <Col key={book._id} md={4} className="mb-3">
+              <Card>
+                <Card.Img variant="top" src={book.cover} />
                 <Card.Body>
                   <Card.Title>{book.title}</Card.Title>
-                  <Card.Text className="text-muted">By {book.author}</Card.Text>
-                  <Button variant="danger" size="sm" onClick={() => deleteBook(book._id)}>
-                    🗑 Remove from Library
+                  <Card.Text>{book.author}</Card.Text>
+                  <Button variant="danger" onClick={() => deleteBook(book._id)}>
+                    Delete
                   </Button>
                 </Card.Body>
               </Card>
             </Col>
           ))
+        ) : (
+          <p>No books in your library.</p>
         )}
       </Row>
 
-      <hr className="my-5" />
-
-      <Row className="mt-4">
-        <h3 className="w-100">Available Books to Add</h3>
-        {filteredAvailableBooks.length === 0 ? (
-          <p className="w-100 text-muted">All books are already in your library.</p>
-        ) : (
-          filteredAvailableBooks.map((book, index) => (
-            <Col key={index} md={4} className="mb-4">
-              <Card className="shadow-sm h-100">
-                <Card.Img
-                  variant="top"
-                  src={book.cover}
-                  alt={book.title}
-                  style={{ height: "200px", objectFit: "cover" }}
-                />
-                <Card.Body>
-                  <Card.Title>{book.title}</Card.Title>
-                  <Card.Text className="text-muted">By {book.author}</Card.Text>
-                  <Button variant="success" size="sm" onClick={() => addBook(book)}>
-                    ➕ Add to Library
-                  </Button>
-                </Card.Body>
-              </Card>
-            </Col>
-          ))
-        )}
+      <h3>Add a Book</h3>
+      <Row>
+        {filteredAvailableBooks.map((book) => (
+          <Col key={book.title} md={4} className="mb-3">
+            <Card>
+              <Card.Img variant="top" src={book.cover} />
+              <Card.Body>
+                <Card.Title>{book.title}</Card.Title>
+                <Card.Text>{book.author}</Card.Text>
+                <Button variant="primary" onClick={() => addBook(book)}>
+                  Add to Library
+                </Button>
+              </Card.Body>
+            </Card>
+          </Col>
+        ))}
       </Row>
     </Container>
   );
